@@ -1,0 +1,15 @@
+[package]
+name = "llvm-win64-isel-sched-crash"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Minimal reproducer: LLVM's X86 instruction scheduler crashes on a Win64 call that passes a bool on the stack next to a sin() result"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+# Use the Win64 calling convention explicitly (`extern "win64"`), so the
+# crash reproduces when building for any x86-64 target, Linux and macOS
+# included, not only for Windows.
+win64-anywhere = []

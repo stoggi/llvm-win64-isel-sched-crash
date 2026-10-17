@@ -1,0 +1,8 @@
+# The toolchain the crash was found on. Nightly (rustc 1.101, LLVM 23.1.4)
+# also fails, with a different symptom; see the README. The Windows target
+# lets any host cross-build the library (no linker is needed for a lib),
+# and llvm-tools brings the llc that llvm/run-llc.sh drives.
+[toolchain]
+channel = "1.95.0"
+targets = ["x86_64-pc-windows-msvc"]
+components = ["llvm-tools"]
