@@ -1,0 +1,13 @@
+[package]
+name = "king-cape"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "The LLVM Win64 scheduler crash, in the shape of the game code that hit it: posing a king's cape"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+# The game's fix: pass the cape's inputs as one struct by reference.
+cape-wind = []

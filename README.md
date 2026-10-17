@@ -83,6 +83,63 @@ building for the host's own target:
 cargo build --release --features win64-anywhere
 ```
 
+### Getting the IR from the Rust code
+
+`llvm/emit-ir.sh` runs rustc with `--emit=llvm-ir` (for
+`x86_64-pc-windows-msvc` at `opt-level=3`, no debug info) and prints the
+crashing function:
+
+```sh
+./llvm/emit-ir.sh                                                # -> llvm/repro-from-rust.ll
+./llvm/emit-ir.sh king-cape/src/lib.rs llvm/king-cape-from-rust.ll
+TARGET=x86_64-unknown-linux-gnu OPT=0 ./llvm/emit-ir.sh          # other targets and levels
+```
+
+It calls rustc directly because cargo skips the compile when the crate is
+already built. The command it runs:
+
+```sh
+rustc --edition 2024 --crate-type lib --target x86_64-pc-windows-msvc \
+    -C opt-level=3 -C panic=abort -C debuginfo=0 \
+    --emit=llvm-ir src/lib.rs -o llvm/repro-from-rust.ll
+```
+
+`llvm/repro-from-rust.ll` is its output, kept for reference;
+`llc -O3 -filetype=obj -o /dev/null llvm/repro-from-rust.ll` crashes on it
+too (the triple is inside the file).
+
+To watch the scheduler get stuck, an `llc` built with assertions (a stock
+release build has no debug output) prints the scheduling units and every
+decision:
+
+```sh
+llc -O3 -mtriple=x86_64-pc-windows-msvc -filetype=obj -o /dev/null \
+    -debug-only=pre-RA-sched llvm/repro.ll
+```
+
+### On Linux, with Linux's own calling convention
+
+Not reachable this way, as far as I found. The crash needs the compare's
+result stored as a single byte straight into a stack argument slot
+(`SETCCm` inside the call sequence). The System V convention
+(`CC_X86_64_C`) widens `i1`, `i8` and `i16` stack arguments to 32 bits, so
+the value is set into a register first (`SETCCr`, no chain) and stored with
+a plain `movl`; the flags never have to cross `ADJCALLSTACKDOWN64`. Win64
+(`CC_X86_Win64_C`) only widens `i1` to `i8`, so it stores the byte.
+
+Calling conventions that follow the Win64 argument rules do trigger it on
+`x86_64-unknown-linux-gnu`. Every x86 convention LLVM accepts was tried
+against an assertions build of LLVM main; only these reach the assertion:
+
+| On x86_64 Linux | LLVM IR | Rust |
+|---|---|---|
+| Win64 | `win64cc` | `extern "win64"` (stable), `extern "efiapi"` (stable) |
+| vectorcall | `x86_vectorcallcc` | `extern "vectorcall"` (nightly, `abi_vectorcall`) |
+| System V (default), `sysv64`, `fastcc`, `coldcc`, swift, tail, preserve, GHC, HiPE, regcall | | no crash |
+
+`extern "efiapi"` is the realistic one: it is how Rust code running on
+Linux targets declares UEFI firmware calls.
+
 ### With LLVM alone
 
 `llvm/repro.ll` is the same function as LLVM IR. `llvm/run-llc.sh` runs it
@@ -127,6 +184,32 @@ registers, one slot each whether integer or float (`RCX`, `RDX`, `R8`,
 space. So `flag` is stored to the stack while `sum` is in a register. On
 Linux (System V) there are six integer and eight float argument registers,
 so the same call passes everything in registers.
+
+## The same crash in the game's own code
+
+`king-cape/` is a second crate with the code that actually hit this: the
+per-frame pose for a king's cape, with the game's types, constants and
+arithmetic (only the spring physics behind the call is simplified).
+
+```sh
+cd king-cape
+cargo build --release --target x86_64-pc-windows-msvc                      # crashes
+cargo build --release --target x86_64-pc-windows-msvc --features cape-wind # the game's fix: builds
+```
+
+Every piece of the 11-line reproducer is something the cape code does:
+
+| Reproducer | King's cape (`pose_cape`) |
+|---|---|
+| `let flag = *p != 0;` | `let drape = mount.is_some();` where `mount: Option<Accessory>` keeps "no mount" as `i64::MIN` in the `Vec` capacity, so it is a load and `icmp ne i64 %v, -9223372036854775808` |
+| `y.sin()` | `(beat * 2.0).sin()` and `beat.sin()`: the stride pump and sway |
+| `if c { 0.8 } else { x }` | `.clamp(0.0, CAPE_TRAIL_MAX)`, `CAPE_TRAIL_MAX` being `0.8`; LLVM merges it with the `CAPE_TURN_MAX` clamp into a `<2 x float>` select |
+| `sum = y.sin() + sel` | `trail = clamp(...) + pump`, `sideways = clamp(...) + sway` |
+| `callee(a, b, d, sum, flag)` | `swing_cape(cape_swing, &pieces, dt, trail, sideways, stir, drape)`: with the 392-byte return slot, ten machine arguments, the `bool` last on the stack |
+
+The fix the game shipped, `CapeWind`, passes `dt`, `trail`, `sideways`,
+`stir` and `drape` as one struct by reference, so `drape` is no longer a
+stack argument and no `SETCCm` lands inside the call sequence.
 
 ## What it takes to crash
 
@@ -192,11 +275,13 @@ failed`, and `-debug-only=pre-RA-sched` shows why:
    (LLVM 22) or a runaway list (LLVM 23) without.
 
 `llvm/fix-scheduledagrrlist.patch` makes that path skip call-resource
-interferences and resolve the real `EFLAGS` one; LLVM then unfolds the
-compare's load exactly as the `fast` scheduler does. With the patch,
-LLVM's 5762 X86 code generation tests still pass, the game's original
-function compiles, and the patch's new regression test fails without the
-change. The sections below are the investigation that led there.
+interferences and resolve the real `EFLAGS` one; LLVM then splits the
+compare's load back out, as the `fast` scheduler also does (though it
+places the load after the `sinf` call). With the patch, LLVM's 5762 X86
+code generation tests still pass, a release build of main compiles the
+reproducer and the game's original function (unpatched, it fails with
+`SmallVector unable to grow`), and the patch's new regression test fails
+without the change. The sections below are the investigation that led there.
 
 ### Where it crashes
 
@@ -317,20 +402,28 @@ it later.
 
 | Path | What |
 |---|---|
+| `WALKTHROUGH.md` | Line by line: each Rust line, its IR, and how it sets up the crash |
 | `src/lib.rs` | The Rust reproducer (`extern "C"`, or `extern "win64"` with `--features win64-anywhere`) |
+| `king-cape/` | The crash in the game's own shape (a king's cape), with `--features cape-wind` for the shipped fix |
 | `Cargo.toml` | Library crate; the `win64-anywhere` feature |
 | `rust-toolchain.toml` | Pins rustc 1.95.0, adds the Windows target and `llvm-tools` |
 | `llvm/repro.ll` | The same function as LLVM IR |
 | `llvm/repro-win64cc.ll` | The IR for a Linux triple, with the call marked `win64cc` |
 | `llvm/run-llc.sh` | Runs both through the toolchain's `llc` for several targets |
+| `llvm/llvm-reduce/` | rustc bitcode for both reproducers, `llvm-reduce` output for each (`*.reduced.bc`, `*.reduced.ll`), and the interestingness test `reduce-test.sh` |
+| `llvm/emit-ir.sh` | Emits rustc's LLVM IR for a reproducer (Windows target, `opt-level=3` by default) |
+| `llvm/repro-from-rust.ll` | That IR for `src/lib.rs`, as rustc 1.95.0 emits it |
 | `llvm/fix-scheduledagrrlist.patch` | Proposed LLVM fix plus a regression test, against main 793ff02cdb35 |
 | `issues/llvm.md` | Draft issue for llvm/llvm-project |
 | `issues/rust.md` | Draft issue for rust-lang/rust (ICE template) |
 
 ## Reporting it
 
-A web search (October 2026) found no existing report of this combination
-in LLVM's or rust-lang/rust's trackers. `llvm/repro.ll` with
-`llc -O3 -mtriple=x86_64-pc-windows-msvc repro.ll` is a self-contained
-LLVM report (it reproduces on LLVM 22.1.2 and 23.1.4); the Rust crate
-suits a rust-lang/rust issue labelled as an LLVM codegen crash.
+`issues/llvm.md` follows LLVM's bug-reporting guide for a code generator
+crash: rustc's bitcode (`llvm/llvm-reduce/king-cape.bc`) crashes `llc`
+with no extra options and with `-relocation-model=pic` and `=static`,
+`opt -O3` runs cleanly on it, and `llvm-reduce` (with `reduce-test.sh`,
+which requires the `getMinimalPhysRegClass` assertion) reduces it to
+`king-cape.reduced.bc`: the same five instructions as `llvm/repro.ll`. The
+draft lists the files to attach. `issues/rust.md` is the matching
+rust-lang/rust report.
