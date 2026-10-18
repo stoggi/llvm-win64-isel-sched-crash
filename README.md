@@ -1,5 +1,12 @@
 # LLVM Win64 instruction scheduler crash
 
+This is an investigation into a LLVM crash observed when compiling a rust program with `--target x86_64-pc-windows-msvc`. Generative coding model Claude Code (Opus 5.5) was used to help perform the investigation. This repo is used as a reference for raising an issue with llvm/llvm-project and rust-lang/rust.
+
+All the following is as-is, without warrenty, may not work, may not be correct, may contain inaccuracies or inconsistencies.
+
+---
+
+
 An eleven-line Rust function that crashes rustc when it is compiled with
 optimisation for 64-bit Windows. The crash is inside LLVM, in the X86
 instruction scheduler, and is triggered by one call shape under the Win64
