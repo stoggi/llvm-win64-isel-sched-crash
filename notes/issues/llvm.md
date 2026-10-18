@@ -6,7 +6,6 @@
        llvm/repro.bc                           (unreduced rustc bitcode for src/lib.rs)
        llvm/reduce-test.sh                     (llvm-reduce interestingness test)
        llvm/make-testcase.sh                   (the commands that made the two above)
-       notes/llvm/repro.ll                     (equivalent hand-cleaned test case)
        notes/llvm/fix-scheduledagrrlist.patch  (proposed fix + regression test)
      or open the patch as a PR and link it. Fill in the link at the bottom. -->
 
@@ -79,7 +78,7 @@ unreduced bitcode (`repro.bc`):
 
 `llc` does not fold `llvm.sin.f32` of a constant, so the reduced case
 still contains the libcall. An equivalent hand-cleaned version with real
-operands (attached as `repro.ll`), which the analysis below uses:
+operands (`repro.ll`), which the analysis below uses:
 
 ```llvm
 target triple = "x86_64-pc-windows-msvc"
