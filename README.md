@@ -1,5 +1,11 @@
 # LLVM Win64 instruction scheduler crash
 
+This is an investigation into a LLVM crash observed when compiling a rust program with `--target x86_64-pc-windows-msvc`. Generative coding model Claude Code (Opus 5.5) was used to help perform the investigation. This repo is used as a reference for raising an issue with llvm/llvm-project and rust-lang/rust.
+
+All the following is as-is, without warrenty, may not work, may not be correct, may contain inaccuracies or inconsistencies.
+
+---
+
 A ten-line Rust function that crashes rustc (and LLVM's `llc`) when it is
 compiled with optimisation for 64-bit Windows.
 
@@ -9,6 +15,7 @@ block, LLVM's X86 instruction scheduler (`ScheduleDAGRRList`) runs out of
 ways to order the block. Its last-resort path then treats its internal
 "call in progress" marker (`CallResource`) as a real register, and the
 register lookup goes out of range.
+
 
 | Toolchain | LLVM | Result |
 |---|---|---|
@@ -36,7 +43,7 @@ pub fn repro(p: &u64, c: bool, x: f32, y: f32, a: *const u8, b: *const u8, d: *c
 ## Triggering it with Rust
 
 ```sh
-./repro.sh
+cargo build --release --target x86_64-pc-windows-msvc
 ```
 
 which runs `cargo build --release --target x86_64-pc-windows-msvc`. It
