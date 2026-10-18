@@ -2,11 +2,12 @@
      Suggested labels: backend:X86, llvm:SelectionDAG, crash (the
      guidelines say labels are optional).
      Attach:
-       llvm/llvm-reduce/king-cape.reduced.bc   (llvm-reduce output, the test case)
-       llvm/llvm-reduce/king-cape.bc           (unreduced rustc bitcode)
-       llvm/llvm-reduce/reduce-test.sh         (llvm-reduce interestingness test)
-       llvm/repro.ll                           (equivalent hand-cleaned test case)
-       llvm/fix-scheduledagrrlist.patch        (proposed fix + regression test)
+       llvm/repro.reduced.bc                   (llvm-reduce output, the test case)
+       llvm/repro.bc                           (unreduced rustc bitcode for src/lib.rs)
+       llvm/reduce-test.sh                     (llvm-reduce interestingness test)
+       llvm/make-testcase.sh                   (the commands that made the two above)
+       notes/llvm/repro.ll                     (equivalent hand-cleaned test case)
+       notes/llvm/fix-scheduledagrrlist.patch  (proposed fix + regression test)
      or open the patch as a PR and link it. Fill in the link at the bottom. -->
 
 **Title:** [SelectionDAG] ScheduleDAGRRList's last-resort path treats CallResource as a physical register (Win64 call with a SETCCm stack argument and an FSIN libcall)
@@ -29,9 +30,9 @@ llvm::X86GenRegisterInfo::getMinimalPhysRegClass(llvm::MCRegister) const:
 Assertion `Reg < ArrayRef(Mapping).size()' failed.
 PLEASE submit a bug report to https://github.com/llvm/llvm-project/issues/ and include the crash backtrace and instructions to reproduce the bug.
 Stack dump:
-0.	Program arguments: llc king-cape.reduced.ll -o /dev/null
-1.	Running pass 'Function Pass Manager' on module 'king-cape.reduced.ll'.
-2.	Running pass 'X86 DAG->DAG Instruction Selection' on function '@pose_cape'
+0.	Program arguments: llc repro.reduced.ll -o /dev/null
+1.	Running pass 'Function Pass Manager' on module 'repro.reduced.ll'.
+2.	Running pass 'X86 DAG->DAG Instruction Selection' on function '@_ZN3lib5repro17h835476f1a4376633E'
 ```
 
 Without assertions it does not stop there and fails later: `LLVM ERROR:
@@ -41,20 +42,20 @@ a proposed fix and a test are below.
 ### Reproducing
 
 Reduced test case, as emitted by `llvm-reduce` (attached as
-`king-cape.reduced.bc`):
+`repro.reduced.bc`):
 
 ```llvm
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-windows-msvc"
 
-define void @pose_cape(i1 %0) {
+define void @_ZN3lib5repro17h835476f1a4376633E(i1 %c) {
 start:
-  %self.sroa.0.1.i5 = select i1 %0, float 1.000000e+00, float 0.000000e+00
-  %1 = tail call float @llvm.sin.f32(float 0.000000e+00)
-  %sideways = fadd float %self.sroa.0.1.i5, %1
-  %2 = load i64, ptr null, align 8
-  %3 = icmp ne i64 %2, 0
-  call fastcc void null(float 0.000000e+00, float %sideways, float 0.000000e+00, float 0.000000e+00, i1 %3)
+  %spec.store.select = select i1 %c, float 1.000000e+00, float 0.000000e+00
+  %0 = tail call float @llvm.sin.f32(float 0.000000e+00)
+  %sum = fadd float %spec.store.select, %0
+  %_9 = load i64, ptr null, align 8
+  %flag = icmp ne i64 %_9, 0
+  tail call void null(ptr null, ptr null, ptr null, float %sum, i1 %flag)
   ret void
 }
 
@@ -64,11 +65,11 @@ attributes #0 = { nocallback nocreateundeforpoison nofree nosync nounwind specul
 ```
 
 ```sh
-llc king-cape.reduced.ll -o /dev/null
+llc repro.reduced.ll -o /dev/null
 ```
 
 All three commands from the bug-reporting guide fail on it, as on the
-unreduced bitcode (`king-cape.bc`):
+unreduced bitcode (`repro.bc`):
 
 | Command | main 793ff02cdb35, assertions | main 793ff02cdb35, no assertions | 22.1.2 (rustc 1.95.0) |
 |---|---|---|---|
@@ -97,6 +98,51 @@ define void @repro(ptr %p, i1 %c, float %x, float %y, ptr %a, ptr %b, ptr %d) {
 }
 ```
 
+### How the test case was made
+
+The bitcode is rustc's output for this Rust (attached
+`make-testcase.sh` runs every step):
+
+```rust
+unsafe extern "C" {
+    fn callee(a: *const u8, b: *const u8, c: *const u8, x: f32, flag: bool);
+}
+
+pub fn repro(p: &u64, c: bool, x: f32, y: f32, a: *const u8, b: *const u8, d: *const u8) {
+    let flag = *p != 0;
+    let sel = if c { 0.8 } else { x };
+    let sum = y.sin() + sel;
+    unsafe { callee(a, b, d, sum, flag) };
+}
+```
+
+```sh
+# rustc 1.95.0; the equivalent of clang's -emit-llvm -c at -O3
+rustc --edition 2024 --crate-type lib --target x86_64-pc-windows-msvc \
+    -C opt-level=3 -C panic=abort -C debuginfo=0 \
+    --emit=llvm-bc lib.rs -o repro.bc
+
+# the guide's three commands; each crashes
+llc repro.bc -o /dev/null
+llc repro.bc -relocation-model=pic -o /dev/null
+llc repro.bc -relocation-model=static -o /dev/null
+
+# runs cleanly
+opt -O3 repro.bc -disable-output
+
+# reduce, keeping only failures with the same assertion (reduce-test.sh)
+llvm-reduce -j 20 --test=./reduce-test.sh repro.bc -o repro.reduced.bc
+llvm-dis repro.reduced.bc -o repro.reduced.ll
+```
+
+`reduce-test.sh`:
+
+```sh
+#!/bin/bash
+"${NOT:-not}" --crash "${LLC:-llc}" "$1" -o /dev/null 2> "$1.err" || exit 1
+grep -q "getMinimalPhysRegClass" "$1.err"
+```
+
 ### Where LLVM came from
 
 - **llvm/llvm-project main at 793ff02cdb35** (llvmorg-24-init-14827),
@@ -122,14 +168,12 @@ followed with the rustc equivalents:
 
 1. `rustc --emit=llvm-bc -C opt-level=3 --target x86_64-pc-windows-msvc`
    (the equivalent of `-emit-llvm -c`) succeeds: not a front-end crash.
-2. `opt -O3 king-cape.bc -disable-output` succeeds: not a middle-end crash.
-3. `llc king-cape.bc` crashes (all three variants above): a code generator
+2. `opt -O3 repro.bc -disable-output` succeeds: not a middle-end crash.
+3. `llc repro.bc` crashes (all three variants above): a code generator
    crash.
-4. Reduced with `llvm-reduce -j 20 --test=reduce-test.sh king-cape.bc`. The
-   test (attached) requires `llc` to fail with the `getMinimalPhysRegClass`
-   assertion, so the reduction cannot drift onto a different crash.
-   Reducing the separate small Rust reproducer the same way gives the same
-   five instructions.
+4. Reduced with `llvm-reduce`. The test requires `llc` to fail with the
+   `getMinimalPhysRegClass` assertion, so the reduction cannot drift onto a
+   different crash.
 
 ### Cause
 
@@ -277,9 +321,9 @@ Testing (on 793ff02cdb35):
   (`repro.ll` with checks from `update_llc_test_checks.py`), fails without
   the change and passes with it.
 - With the change, both the assertions build and the build without
-  assertions compile `king-cape.reduced.ll`, `king-cape.bc`, the
-  `repro.ll` and `win64cc` variants, and the original function this was
-  reduced from (a few thousand lines of rustc output). Without it, the
+  assertions compile `repro.reduced.ll`, `repro.bc`, the `repro.ll` and
+  `win64cc` variants, and the original function this was reduced from (a
+  few thousand lines of rustc output). Without it, the
   build without assertions fails on each with `SmallVector unable to grow`.
 
 This is the smallest change that fixes it. Alternatives that may be
@@ -292,6 +336,6 @@ real-register one.
 
 Found through rustc building a game for `x86_64-pc-windows-msvc`: the
 release build crashed on a call that passed five floats and a `bool` on the
-stack (the cape animation of a unit, hence `pose_cape`). Rust reproducer
+stack (the cape animation of a unit). Rust reproducer
 and full notes:
 <!-- link to the rust-lang/rust issue or a repository with this folder -->

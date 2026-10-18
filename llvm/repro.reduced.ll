@@ -1,15 +1,15 @@
-; ModuleID = 'king-cape.reduced.bc'
+; ModuleID = 'repro.reduced.bc'
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-windows-msvc"
 
-define void @pose_cape(i1 %0) {
+define void @_ZN3lib5repro17h835476f1a4376633E(i1 %c) {
 start:
-  %self.sroa.0.1.i5 = select i1 %0, float 1.000000e+00, float 0.000000e+00
-  %1 = tail call float @llvm.sin.f32(float 0.000000e+00)
-  %sideways = fadd float %self.sroa.0.1.i5, %1
-  %2 = load i64, ptr null, align 8
-  %3 = icmp ne i64 %2, 0
-  call fastcc void null(float 0.000000e+00, float %sideways, float 0.000000e+00, float 0.000000e+00, i1 %3)
+  %spec.store.select = select i1 %c, float 1.000000e+00, float 0.000000e+00
+  %0 = tail call float @llvm.sin.f32(float 0.000000e+00)
+  %sum = fadd float %spec.store.select, %0
+  %_9 = load i64, ptr null, align 8
+  %flag = icmp ne i64 %_9, 0
+  tail call void null(ptr null, ptr null, ptr null, float %sum, i1 %flag)
   ret void
 }
 

@@ -7,9 +7,3 @@ description = "Minimal reproducer: LLVM's X86 instruction scheduler crashes on a
 
 [lib]
 path = "src/lib.rs"
-
-[features]
-# Use the Win64 calling convention explicitly (`extern "win64"`), so the
-# crash reproduces when building for any x86-64 target, Linux and macOS
-# included, not only for Windows.
-win64-anywhere = []

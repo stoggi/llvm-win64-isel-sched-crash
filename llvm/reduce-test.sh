@@ -4,6 +4,6 @@
 # -DLLVM_ENABLE_ASSERTIONS=ON (without the fix) and `not` from an LLVM build.
 #
 #   LLC=/path/to/llc NOT=/path/to/not \
-#     llvm-reduce -j 20 --test=./reduce-test.sh king-cape.bc -o king-cape.reduced.bc
+#     llvm-reduce -j 20 --test=./reduce-test.sh repro.bc -o repro.reduced.bc
 "${NOT:-not}" --crash "${LLC:-llc}" "$1" -o /dev/null 2> "$1.err" || exit 1
 grep -q "getMinimalPhysRegClass" "$1.err"

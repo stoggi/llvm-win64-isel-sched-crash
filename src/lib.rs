@@ -7,17 +7,10 @@
 //! by comparing a loaded value, and the bool being the fifth argument,
 //! which Win64 passes on the stack.
 
-#[cfg(not(feature = "win64-anywhere"))]
 unsafe extern "C" {
     fn callee(a: *const u8, b: *const u8, c: *const u8, x: f32, flag: bool);
 }
 
-#[cfg(feature = "win64-anywhere")]
-unsafe extern "win64" {
-    fn callee(a: *const u8, b: *const u8, c: *const u8, x: f32, flag: bool);
-}
-
-#[unsafe(no_mangle)]
 pub fn repro(p: &u64, c: bool, x: f32, y: f32, a: *const u8, b: *const u8, d: *const u8) {
     let flag = *p != 0;
     let sel = if c { 0.8 } else { x };
